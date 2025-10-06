@@ -2,17 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import seaborn as sns
-from statsmodels.tsa.statespace.sarimax import SARIMAX  # Ensure SARIMAX is imported
-from prophet import Prophet
+from statsmodels.tsa.statespace.sarimax import SARIMAX  # For ARIMA forecasting
+from prophet import Prophet  # For Prophet forecasting
 from statsmodels.tsa.stattools import adfuller
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import warnings
 from matplotlib import pyplot as plt
 
 warnings.filterwarnings("ignore")
+
+# Streamlit page configuration 
 st.set_page_config(page_title="AQI Dashboard", layout="wide")
 
-# --- City Data Files ---
 cities = {
     'Delhi': 'Delhi final data.xlsx',
     'Mumbai': 'Mumbai final data.xlsx',
@@ -21,10 +22,11 @@ cities = {
     'Bangalore': 'Bangalore final data.xlsx'
 }
 
+# Dashboard Title and Description
 st.title("🌍 AQI Dashboard")
 st.markdown("Interactive analysis of AQI across Indian cities")
 
-# --- Load Data ---
+# Load and Preprocess Data
 @st.cache_data
 def load_data():
     dfs = []
@@ -37,12 +39,13 @@ def load_data():
             df_city[col].fillna(df_city[col].mean(), inplace=True)
         df_city['City'] = city
         dfs.append(df_city)
+
     combined = pd.concat(dfs, ignore_index=True)
     return combined
 
 df = load_data()
 
-# --- Outlier Removal (IQR method) ---
+# Outlier Removal using IQR method
 df_filtered = pd.DataFrame()
 for city in df['City'].unique():
     df_city = df[df['City'] == city].copy()
@@ -54,14 +57,14 @@ for city in df['City'].unique():
 
 df = df_filtered
 
-# --- Sidebar Filters ---
+# Sidebar filters: city selection & aggregation frequency
 st.sidebar.header("Filters")
 selected_cities = st.sidebar.multiselect("Select Cities", df["City"].unique(), default=df["City"].unique())
 agg_freq = st.sidebar.radio("Aggregation", ["Daily", "Monthly", "Quarterly", "Half-Yearly"])
 
 filtered_df = df[df["City"].isin(selected_cities)].copy()
 
-# --- Aggregation ---
+# Data Aggregation
 if agg_freq == "Monthly":
     filtered_df = filtered_df.groupby([pd.Grouper(key="Date", freq="M"), "City"])["AQI"].mean().reset_index()
 elif agg_freq == "Quarterly":
@@ -69,19 +72,24 @@ elif agg_freq == "Quarterly":
 elif agg_freq == "Half-Yearly":
     filtered_df = filtered_df.groupby([pd.Grouper(key="Date", freq="2Q"), "City"])["AQI"].mean().reset_index()
 
-# --- Tabs ---
+# Streamlit Tabs
+# 1. Data Overview: Show filtered dataframe
+# 2. Trends & Distribution: Visualize AQI trends and distributions
+# 3. Peak Pollution Analysis: Highlight top 10% AQI weeks
+# 4. Forecasting: ARIMA vs Prophet forecasts
+# 5. Policy Recommendations: Suggest actionable measures
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Data Overview", "Trends & Distribution", 
     "Peak Pollution Analysis", "Forecasting", "Policy Recommendations"
 ])
 
-# --- Tab 1: Data Overview ---
+# Tab 1: Data Overview
 with tab1:
     st.subheader("Filtered Data")
     st.write("Number of rows after filtering:", filtered_df.shape[0])
     st.dataframe(filtered_df.head(20))
 
-# --- Tab 2: Trends & Distribution ---
+# Tab 2: Trends & Distribution
 with tab2:
     st.subheader("AQI Trends Over Time")
     fig, ax = plt.subplots(figsize=(12,6))
@@ -99,7 +107,7 @@ with tab2:
     ax2.set_ylabel("AQI")
     st.pyplot(fig2)
 
-# --- Tab 3: Peak Pollution Analysis ---
+# Tab 3: Peak Pollution Analysis
 with tab3:
     st.subheader("Peak Pollution Weeks (Top 10%)")
     for city in selected_cities:
@@ -109,6 +117,7 @@ with tab3:
         st.write(f"**{city}** - Peak AQI Threshold: {peak_threshold:.1f}, Weeks Above Threshold: {len(peak_weeks)}")
         st.dataframe(peak_weeks)
 
+        # Plot AQI time series highlighting peak weeks
         fig, ax = plt.subplots(figsize=(12,4))
         ax.plot(df_city['Date'], df_city['AQI'], label="AQI", color='blue')
         ax.scatter(peak_weeks['Date'], peak_weeks['AQI'], color='red', label="Top 10% AQI Weeks")
@@ -118,33 +127,30 @@ with tab3:
         ax.legend()
         st.pyplot(fig)
 
+# Tab 4: Forecasting
 with tab4:
     st.subheader("Forecasting for Selected Cities")
     
-    # Three tabs: ARIMA, Prophet, Comparison
     arima_tab, prophet_tab, comparison_tab = st.tabs(["ARIMA Forecast", "Prophet Forecast", "Model Comparison"])
-    
-    # --- Store metrics for comparison ---
+
     metrics_dict = {}
 
-    # --- ARIMA Forecast ---
+    # ARIMA Forecast
     with arima_tab:
         for city in selected_cities:
             st.markdown(f"### {city} - ARIMA Forecast")
-
-            # --- Prepare weekly series with actual AQI values ---
             df_city = filtered_df[filtered_df["City"] == city].set_index('Date').asfreq('D')
             y = df_city['AQI'].astype(float).fillna(method='ffill').fillna(method='bfill')
 
             try:
-                # Fit SARIMAX
+                # Resample weekly for SARIMAX modeling
                 y_weekly = y.resample('W').mean()
 
-                # Fit SARIMAX with weekly seasonality
+                # Fit SARIMAX with seasonal adjustment
                 model = SARIMAX(
                     y_weekly,
                     order=(2,1,2),
-                    seasonal_order=(1,1,1,52),  # add seasonal differencing for better pattern
+                    seasonal_order=(1,1,1,52),
                     enforce_stationarity=False,
                     enforce_invertibility=False
                 )
@@ -173,32 +179,34 @@ with tab4:
             except Exception as e:
                 st.write(f"ARIMA forecast could not be computed for {city}: {e}")
 
-    # --- Prophet Forecast ---
+    # Prophet Forecast
     with prophet_tab:
         for city in selected_cities:
             st.markdown(f"### {city} - Prophet Forecast")
             df_prophet = df[df["City"] == city][['Date','AQI']].rename(columns={'Date':'ds','AQI':'y'})
             df_prophet['y'] = df_prophet['y'].replace([np.inf, -np.inf], np.nan).fillna(method='ffill').fillna(method='bfill')
 
+            # Fit Prophet model
             model = Prophet(yearly_seasonality=True, weekly_seasonality=True, changepoint_prior_scale=0.03)
             model.add_seasonality(name='monthly', period=30.5, fourier_order=5)
             model.fit(df_prophet)
 
+            # Forecast next 26 weeks
             future = model.make_future_dataframe(periods=26, freq='W')
             forecast = model.predict(future)
 
-            # In-sample metrics
+            # Calculate in-sample metrics
             forecast_in_sample = forecast[forecast['ds'] <= df_prophet['ds'].max()]
             mae = mean_absolute_error(df_prophet['y'], forecast_in_sample['yhat'])
             rmse = np.sqrt(mean_squared_error(df_prophet['y'], forecast_in_sample['yhat']))
 
-            # Save metrics
+            # Save metrics for comparison
             if city in metrics_dict:
                 metrics_dict[city].update({'Prophet_MAE': mae, 'Prophet_RMSE': rmse})
             else:
                 metrics_dict[city] = {'Prophet_MAE': mae, 'Prophet_RMSE': rmse}
 
-            # Plot
+            # Plot past 1 year + forecast
             df_plot = df_prophet.set_index('ds').resample('W').mean().reset_index()
             df_recent = df_plot[-52:]
             forecast_plot = forecast[forecast['ds'] > df_prophet['ds'].max()]
@@ -213,13 +221,13 @@ with tab4:
             ax.legend()
             st.pyplot(fig)
 
-    # --- Model Comparison ---
+    # Model Comparison
     with comparison_tab:
         st.subheader("ARIMA vs Prophet In-Sample Metrics")
         comparison_df = pd.DataFrame.from_dict(metrics_dict, orient='index')
         st.dataframe(comparison_df.style.format("{:.2f}"))
 
-# --- Tab 5: Policy Recommendations ---
+# Tab 5: Policy Recommendations
 with tab5:
     st.subheader("Policy-Level Interventions and Public Health Recommendations")
     st.markdown("""
@@ -236,4 +244,3 @@ with tab5:
     - **Sensitive Groups:** Advise children, elderly, and individuals with respiratory conditions to take extra precautions.
     - **Health Awareness:** Conduct campaigns to inform citizens about the health risks of air pollution and preventive measures.
     """)
-
